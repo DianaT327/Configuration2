@@ -108,3 +108,33 @@
 4. Результат выполнения этапа сохранить в репозиторий стандартно 
 оформленным коммитом.
 ### Описание всех функций и настроек
+#### Функции:
+* parse_config(config_path) - парсит конфигурационный XML файл и возвращает параметры с валидацией. Параметры: config_path (str) - путь к XML файлу конфигурации. Возвращает: dict - словарь с параметрами конфигурации.
+* download_and_parse_apkindex(repository_url) - скачивает и парсит APKINDEX.tar.gz из репозитория Alpine Linux. Параметры: repository_url (str) - URL репозитория Alpine. Возвращает: str - содержимое APKINDEX файла.
+* get_all_packages_from_apkindex(repository_url) - получает список всех пакетов из APKINDEX репозитория. Параметры: repository_url (str) - URL репозитория. Возвращает: list - список всех пакетов.
+* get_all_packages_from_test_file(test_repo_path) - получает список всех пакетов из тестового файла. Параметры: test_repo_path (str) - путь к тестовому файлу. Возвращает: list - список пакетов.
+* find_package_dependencies(apkindex_content, package_name, package_version) - ищет зависимости пакета в содержимом APKINDEX. Параметры: apkindex_content (str) - содержимое APKINDEX, package_name (str) - имя пакета, package_version (str) - версия пакета. Возвращает: list - список зависимостей.
+* read_dependencies_from_test_file(package_name, test_repo_path) - читает зависимости пакета из тестового файла. Параметры: package_name (str) - имя пакета, test_repo_path (str) - путь к тестовому файлу. Возвращает: list - список зависимостей.
+* get_package_dependencies(package_name, package_version, repository_url, is_test_mode) - универсальная функция для получения зависимостей пакета. Параметры: package_name (str) - имя пакета, package_version (str) - версия пакета, repository_url (str) - URL репозитория или путь к файлу, is_test_mode (bool) - флаг тестового режима. Возвращает: list - список зависимостей.
+* build_dependency_graph(package_name, package_version, repository_path, is_test_mode, depth=0, max_depth=10, chain=None) - рекурсивно строит граф зависимостей для пакета с использованием DFS. Параметры: package_name (str) - имя пакета, package_version (str) - версия пакета, repository_path (str) - путь к репозиторию, is_test_mode (bool) - флаг тестового режима, depth (int) - текущая глубина рекурсии, max_depth (int) - максимальная глубина рекурсии, chain (list) - текущая цепочка зависимостей.
+* build_complete_dependency_graph(repository_url, is_test_mode) - строит полный граф всех пакетов в репозитории. Параметры: repository_url (str) - URL репозитория или путь к файлу, is_test_mode (bool) - флаг тестового режима.
+* display_dependency_graph() - выводит построенный граф зависимостей в консоль.
+* create_test_files() - создает тестовые файлы для демонстрации работы программы.
+* interactive_test_mode() - запускает интерактивный режим тестирования.
+#### Настройки конфигурационного файла:
+##### Обязательные параметры:
+* package_name (str) - название анализируемого пакета.
+* repository_url (str) - URL-адрес репозитория или путь к файлу.
+##### Опциональные параметры:
+* test_repo_mode (str) - режим работы с тестовым репозиторием. По умолчанию: "local".
+* package_version (str) - версия пакета для анализа. По умолчанию: "1.0.0".
+* ascii_tree_output (bool) - режим вывода зависимостей в формате ASCII-дерева. По умолчанию: False.
+#### Глобальные переменные:
+* APKINDEX_CACHE - кеш для содержимого APKINDEX файла.
+* APKINDEX_URL - URL последнего загруженного APKINDEX.
+* dependency_graph (dict) - хранит граф зависимостей: пакет → список зависимостей.
+* visited (set) - отслеживает полностью обработанные пакеты.
+* visiting (set) - отслеживает пакеты в текущей цепочке (для обнаружения циклов).
+### Описание команд для сборки проекта и запуска тестов
+Программа требует только стандартные библиотеки Python: xml.etree.ElementTree, sys, os, urllib.request, urllib.error, gzip, tarfile, io.BytesIO. Тестирование может проводиться как в интерактивном режиме (пользователь указывает путь к файлу описания графа репозитория), так и путем запуска с конфигурационным XML-файлом.
+### Тестирование
