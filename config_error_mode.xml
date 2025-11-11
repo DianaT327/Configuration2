@@ -1,0 +1,5 @@
+<config>
+    <package_name>test-package</package_name>
+    <repository_url>https://github.com/user/repo.git</repository_url>
+    <test_repo_mode>invalid_mode</test_repo_mode>
+</config>
