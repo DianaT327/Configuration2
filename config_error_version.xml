@@ -1,0 +1,5 @@
+<config>
+    <package_name>test-package</package_name>
+    <repository_url>https://github.com/user/repo.git</repository_url>
+    <package_version>version_without_digits</package_version>
+</config>
