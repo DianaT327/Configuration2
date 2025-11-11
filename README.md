@@ -31,5 +31,16 @@
 ### Тестирование
 Результат работы программы с корректным файлом и параметрами
 <img width="779" height="247" alt="config" src="https://github.com/user-attachments/assets/b0688345-918b-4d71-9185-cbe788c16845" />
+Результат работы программы с ошибкой в имени пакета (отсутствие имени пакета)
+<img width="999" height="42" alt="config_error_package" src="https://github.com/user-attachments/assets/16f9437c-b26e-48de-ab60-90a8ae5291b7" />
+Результат работы программы с ошибкой в URL (отсутствие URL-адреса)
+<img width="1013" height="44" alt="config_error_url" src="https://github.com/user-attachments/assets/6074ba93-bdf2-44b7-a374-96fa0a488569" />
+Результат работы программы с ошибкой в режиме работы с тестовым репозиторием (недопустимый режим работы)
+<img width="1106" height="62" alt="config_error_mode" src="https://github.com/user-attachments/assets/a59c14ab-02f0-4888-9df0-c2d2eaa24ecb" />
+Результат работы программы с ошибкой в версии пакета (некорректный формат версии)
+<img width="1111" height="62" alt="config_error_version" src="https://github.com/user-attachments/assets/9baef9b8-0d3e-4c8c-a975-33c8705cf0d9" />
+Результат работы программы с ошибкой в режиме вывода зависимостей в формате ASCII-дерева (недопустимое значение)
+<img width="1091" height="63" alt="config_error_ascii" src="https://github.com/user-attachments/assets/b64cb183-16e9-49c1-bdc4-190bc01e55e6" />
+
 
 
