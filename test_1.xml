@@ -1,0 +1,5 @@
+<config>
+    <package_name>busybox</package_name>
+    <package_version>1.36.1</package_version>
+    <repository_url>https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64</repository_url>
+</config>
