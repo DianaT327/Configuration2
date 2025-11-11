@@ -31,6 +31,6 @@
 ### Тестирование
 Результат работы программы с корректным файлом и параметрами
 <br>
-<img src="config.png" alt="config" width="500">
+<img src="Этап 1\config.png" alt="config" width="500">
 
 
