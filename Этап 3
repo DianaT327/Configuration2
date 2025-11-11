@@ -7,6 +7,10 @@ import gzip  # для распаковки gzip
 import tarfile  # для работы с tar архивами
 from io import BytesIO  # для работы с бинарными данными в памяти
 
+# Кеш для APKINDEX
+APKINDEX_CACHE = None  # Глобальная переменная для кеширования содержимого APKINDEX
+APKINDEX_URL = None  # Глобальная переменная для хранения URL последнего загруженного APKINDEX
+
 # Глобальные структуры данных для графа
 dependency_graph = {}  # хранит граф: пакет -> список зависимостей
 visited = set()  # отслеживает полностью обработанные пакеты
@@ -16,263 +20,320 @@ visiting = set()  # отслеживает пакеты в текущей цеп
 def parse_config(config_path):
     """Парсит конфигурационный файл XML и возвращает параметры"""
     try:
-        if not os.path.exists(config_path):  # проверяем существование файла
-            raise ValueError(f"Конфигурационный файл не найден: {config_path}")
+        # Проверки валидности файла
+        if not os.path.exists(config_path):  # Проверка существования файла
+            raise FileNotFoundError(f"Конфигурационный файл не найден: {config_path}")
+        if not os.path.isfile(config_path):  # Проверка что это файл
+            raise ValueError(f"Указанный путь не является файлом: {config_path}")
+        if not config_path.lower().endswith('.xml'):  # Проверка расширения
+            raise ValueError(f"Файл должен иметь расширение .xml: {config_path}")
 
-        tree = ET.parse(config_path)  # парсим XML
-        root = tree.getroot()  # получаем корневой элемент
+        tree = ET.parse(config_path)  # Парсинг XML файла
+        root = tree.getroot()  # Получение корневого элемента
+        config = {}  # Инициализация словаря конфигурации
 
-        config = {}  # словарь для хранения конфигурации
+        # Извлечение имени пакета
+        package_name_elem = root.find('package_name')  # Поиск элемента package_name
+        if package_name_elem is None:  # Проверка наличия элемента
+            raise ValueError("Отсутствует обязательный элемент: package_name")
+        if package_name_elem.text is None:  # Проверка что элемент не пустой
+            raise ValueError("Элемент package_name не может быть пустым")
+        package_name = package_name_elem.text.strip()  # Очистка и получение текста
+        if not package_name:  # Проверка на пустую строку
+            raise ValueError("Имя пакета не может быть пустой строкой")
+        if not all(c.isalnum() or c in ['-', '_', '.'] for c in package_name):  # Валидация символов
+            raise ValueError(f"Недопустимые символы в имени пакета: {package_name}")
+        config['package_name'] = package_name  # Сохранение в конфиг
 
-        # Имя анализируемого пакета
-        package_name_elem = root.find('package_name')  # ищем элемент package_name
-        if package_name_elem is None or not package_name_elem.text:  # проверяем наличие
-            raise ValueError("Отсутствует обязательный параметр: package_name")
-        config['package_name'] = package_name_elem.text  # сохраняем значение
+        # Извлечение URL репозитория
+        repository_url_elem = root.find('repository_url')  # Поиск элемента repository_url
+        if repository_url_elem is None:  # Проверка наличия элемента
+            raise ValueError("Отсутствует обязательный элемент: repository_url")
+        if repository_url_elem.text is None:  # Проверка что элемент не пустой
+            raise ValueError("Элемент repository_url не может быть пустым")
+        repository_url = repository_url_elem.text.strip()  # Очистка и получение текста
+        if not repository_url:  # Проверка на пустую строку
+            raise ValueError("URL репозитория не может быть пустой строкой")
+        config['repository_url'] = repository_url  # Сохранение в конфиг
 
-        # URL-адрес репозитория или путь к файлу
-        repository_url_elem = root.find('repository_url')  # ищем элемент repository_url
-        if repository_url_elem is None or not repository_url_elem.text:  # проверяем наличие
-            raise ValueError("Отсутствует обязательный параметр: repository_url")
-        config['repository_url'] = repository_url_elem.text  # сохраняем значение
-
-        # Режим работы с тестовым репозиторием
-        test_repo_mode_elem = root.find('test_repo_mode')  # ищем элемент test_repo_mode
-        if test_repo_mode_elem is not None and test_repo_mode_elem.text:  # если элемент есть
-            config['test_repo_mode'] = test_repo_mode_elem.text.lower() == 'true'  # преобразуем в bool
+        # Извлечение режима тестового репозитория
+        test_repo_mode_elem = root.find('test_repo_mode')  # Поиск элемента test_repo_mode
+        if test_repo_mode_elem is not None and test_repo_mode_elem.text:  # Проверка наличия и содержимого
+            test_repo_mode = test_repo_mode_elem.text.strip().lower()  # Очистка и приведение к нижнему регистру
+            valid_modes = ['true', 'false', 'local', 'remote']  # Допустимые значения
+            if test_repo_mode not in valid_modes:  # Проверка валидности значения
+                raise ValueError(f"Недопустимый режим работы: {test_repo_mode}")
+            config['test_repo_mode'] = test_repo_mode  # Сохранение в конфиг
         else:
-            config['test_repo_mode'] = False  # значение по умолчанию
+            config['test_repo_mode'] = 'false'  # Значение по умолчанию
 
-        # Версия пакета
-        package_version_elem = root.find('package_version')  # ищем элемент package_version
-        if package_version_elem is not None and package_version_elem.text:  # если элемент есть
-            config['package_version'] = package_version_elem.text  # сохраняем значение
+        # Извлечение версии пакета
+        package_version_elem = root.find('package_version')  # Поиск элемента package_version
+        if package_version_elem is not None and package_version_elem.text:  # Проверка наличия и содержимого
+            package_version = package_version_elem.text.strip()  # Очистка текста
+            if not package_version:  # Проверка на пустую строку
+                raise ValueError("Версия пакета не может быть пустой строкой")
+            config['package_version'] = package_version  # Сохранение в конфиг
         else:
-            config['package_version'] = '1.0.0'  # значение по умолчанию
+            config['package_version'] = '1.0.0'  # Значение по умолчанию
 
-        # Режим вывода зависимостей в формате ASCII-дерева
-        ascii_tree_output_elem = root.find('ascii_tree_output')  # ищем элемент ascii_tree_output
-        if ascii_tree_output_elem is not None and ascii_tree_output_elem.text:  # если элемент есть
-            config['ascii_tree_output'] = ascii_tree_output_elem.text.lower() == 'true'  # преобразуем в bool
+        # Извлечение настройки ASCII вывода
+        ascii_tree_output_elem = root.find('ascii_tree_output')  # Поиск элемента ascii_tree_output
+        if ascii_tree_output_elem is not None and ascii_tree_output_elem.text:  # Проверка наличия и содержимого
+            ascii_text = ascii_tree_output_elem.text.strip().lower()  # Очистка и приведение к нижнему регистру
+            valid_boolean_values = ['true', 'false', '1', '0', 'yes', 'no']  # Допустимые булевы значения
+            if ascii_text not in valid_boolean_values:  # Проверка валидности значения
+                raise ValueError(f"Недопустимое значение для ascii_tree_output: {ascii_tree_output_elem.text}")
+            config['ascii_tree_output'] = ascii_text in ['true', '1', 'yes']  # Преобразование в булево значение
         else:
-            config['ascii_tree_output'] = False  # значение по умолчанию
+            config['ascii_tree_output'] = False  # Значение по умолчанию
 
-        return config  # возвращаем конфигурацию
+        return config  # Возврат конфигурации
 
-    except ET.ParseError as e:  # обработка ошибок парсинга XML
+    except ET.ParseError as e:  # Обработка ошибок парсинга XML
         raise ValueError(f"Ошибка парсинга XML: {e}")
-    except Exception as e:  # обработка прочих ошибок
-        raise ValueError(f"Ошибка загрузки конфигурации: {e}")
+    except FileNotFoundError as e:  # Обработка ошибок файла
+        raise ValueError(f"Файл не найден: {e}")
+    except PermissionError as e:  # Обработка ошибок прав доступа
+        raise ValueError(f"Отсутствуют права доступа к файлу: {e}")
+    except Exception as e:  # Обработка всех остальных ошибок
+        raise ValueError(f"Неожиданная ошибка при загрузке конфигурации: {e}")
 
 
 def download_and_parse_apkindex(repository_url):
-    """Скачивает и парсит APKINDEX.tar.gz"""
+    """Скачивает и парсит APKINDEX.tar.gz с кешированием"""
+    global APKINDEX_CACHE, APKINDEX_URL  # Объявление глобальных переменных для кеширования
+
+    if APKINDEX_URL == repository_url and APKINDEX_CACHE is not None:  # Проверка кеша
+        return APKINDEX_CACHE  # Возврат кешированных данных
+
     try:
-        # 1. Формируем URL
-        if repository_url.endswith('/'):  # если URL заканчивается на /
-            apkindex_url = repository_url + 'APKINDEX.tar.gz'  # добавляем без слеша
+        if repository_url.endswith('/'):  # Проверка завершается ли URL слешем
+            apkindex_url = repository_url + 'APKINDEX.tar.gz'  # Формирование URL без дополнительного слеша
         else:
-            apkindex_url = repository_url + '/APKINDEX.tar.gz'  # добавляем со слешом
+            apkindex_url = repository_url + '/APKINDEX.tar.gz'  # Формирование URL с добавлением слеша
 
-        print(f"Скачиваем {apkindex_url}...")
+        print(f"Скачиваем {apkindex_url}...")  # Сообщение о начале загрузки
 
-        # 2. Качаем файл
-        with urllib.request.urlopen(apkindex_url) as response:  # открываем HTTP соединение
-            apkindex_data = response.read()  # читаем все данные
+        with urllib.request.urlopen(apkindex_url) as response:  # HTTP-запрос к репозиторию
+            apkindex_data = response.read()  # Чтение бинарных данных
 
-        print("Файл скачан, распаковываем...")
+        print("Файл скачан, распаковываем...")  # Сообщение о начале распаковки
 
-        # 3. Распаковываем .tar.gz
-        with gzip.GzipFile(fileobj=BytesIO(apkindex_data)) as gz_file:  # создаем gzip файл в памяти
-            tar_data = gz_file.read()  # распаковываем gzip
+        with gzip.GzipFile(fileobj=BytesIO(apkindex_data)) as gz_file:  # Распаковка gzip
+            tar_data = gz_file.read()  # Чтение распакованных tar-данных
 
-        # 4. Читаем tar архив
-        with tarfile.open(fileobj=BytesIO(tar_data)) as tar:  # открываем tar архив
-            # В tar архиве один файл - APKINDEX
-            apkindex_file = tar.extractfile('APKINDEX')  # извлекаем файл APKINDEX
-            apkindex_content = apkindex_file.read().decode('utf-8')  # читаем и декодируем в строку
+        with tarfile.open(fileobj=BytesIO(tar_data)) as tar:  # Открытие tar-архива
+            apkindex_file = tar.extractfile('APKINDEX')  # Извлечение файла APKINDEX из архива
+            apkindex_content = apkindex_file.read().decode('utf-8')  # Чтение и декодирование содержимого
 
-        return apkindex_content  # возвращаем содержимое
+        APKINDEX_CACHE = apkindex_content  # Сохранение в кеш
+        APKINDEX_URL = repository_url  # Сохранение URL в кеш
 
-    except Exception as e:  # обработка всех ошибок
-        raise ValueError(f"Ошибка при загрузке APKINDEX: {e}")
+        return apkindex_content  # Возврат распарсенного содержимого
+
+    except Exception as e:  # Обработка всех исключений
+        raise ValueError(f"Ошибка при загрузке APKINDEX: {e}")  # Преобразование в ValueError с сообщением
+
+
+def get_all_packages_from_apkindex(repository_url):
+    """Получает список всех пакетов из APKINDEX"""
+    apkindex_content = download_and_parse_apkindex(repository_url)  # Загрузка и парсинг APKINDEX
+    lines = apkindex_content.split('\n')  # Разделение содержимого на строки
+
+    packages = []  # Инициализация списка пакетов
+    current_package = None  # Переменная для текущего пакета
+
+    for line in lines:  # Цикл по всем строкам APKINDEX
+        if line.startswith('P:'):  # Если строка содержит имя пакета
+            current_package = line[2:]  # Извлечение имени пакета (после 'P:')
+            if current_package and current_package not in packages:  # Если пакет не пустой и еще не в списке
+                packages.append(current_package)  # Добавление пакета в список
+
+    return packages  # Возврат списка всех уникальных пакетов
+
+
+def get_all_packages_from_test_file(test_repo_path):
+    """Получает список всех пакетов из тестового файла"""
+    try:
+        if not os.path.exists(test_repo_path):  # Проверка существования файла
+            raise ValueError(f"Тестовый файл не найден: {test_repo_path}")  # Ошибка если файл не найден
+
+        with open(test_repo_path, 'r', encoding='utf-8') as f:  # Открытие файла для чтения
+            content = f.read()  # Чтение всего содержимого файла
+
+        packages = []  # Инициализация списка пакетов
+        for line in content.split('\n'):  # Цикл по всем строкам файла
+            line = line.strip()  # Удаление пробелов в начале и конце
+            if line and ':' in line and not line.startswith('#'):  # Проверка на валидную строку (не пустая, содержит :, не комментарий)
+                pkg = line.split(':', 1)[0].strip()  # Извлечение имени пакета до двоеточия
+                if pkg and pkg not in packages:  # Если имя не пустое и еще не в списке
+                    packages.append(pkg)  # Добавление пакета в список
+
+        return packages  # Возврат списка всех пакетов
+
+    except Exception as e:  # Обработка всех исключений
+        raise ValueError(f"Ошибка чтения тестового файла: {e}")  # Преобразование исключения в ValueError
 
 
 def find_package_dependencies(apkindex_content, package_name, package_version):
     """Ищет зависимости пакета в APKINDEX"""
-    lines = apkindex_content.split('\n')  # разбиваем содержимое на строки
+    lines = apkindex_content.split('\n')  # Разделяем содержимое на строки
+    current_package = None  # Текущий обрабатываемый пакет
+    in_target_package = False  # Флаг нахождения в целевом пакете
+    dependencies = []  # Список зависимостей
 
-    current_package = None  # текущий обрабатываемый пакет
-    in_target_package = False  # флаг нахождения в целевом пакете
-    dependencies = []  # список зависимостей
+    for line in lines:  # Цикл по всем строкам APKINDEX
+        if line.startswith('P:'):  # Если строка с именем пакета
+            current_package = line[2:]  # Извлекаем имя пакета
+            in_target_package = (current_package == package_name)  # Проверяем совпадение с искомым
 
-    for line in lines:  # проходим по всем строкам
-        if line.startswith('P:'):  # если строка начинается с P: (название пакета)
-            current_package = line[2:]  # убираем 'P:' и получаем название пакета
-            in_target_package = (current_package == package_name)  # проверяем совпадение с искомым пакетом
+        elif line.startswith('V:'):  # Если строка с версией пакета
+            if in_target_package and package_version and line[2:] != package_version:  # Проверяем версию
+                in_target_package = False  # Сбрасываем флаг если версия не совпадает
 
-        elif line.startswith('V:'):  # если строка начинается с V: (версия пакета)
-            if in_target_package and package_version and line[2:] != package_version:  # если версия не совпадает
-                in_target_package = False  # сбрасываем флаг - версия не совпадает
+        elif line.startswith('D:') and in_target_package:  # Если строка с зависимостями и мы в целевом пакете
+            deps_line = line[2:]  # Извлекаем строку зависимостей
+            if deps_line:  # Если зависимости есть
+                dependencies = [dep.strip() for dep in deps_line.split() if dep.strip()]  # Разделяем и очищаем
+                break  # Прерываем цикл после нахождения зависимостей
 
-        elif line.startswith(
-                'D:') and in_target_package:  # если строка начинается с D: (зависимости) и мы в целевом пакете
-            deps_line = line[2:]  # убираем 'D:' и получаем строку зависимостей
-            if deps_line:  # если зависимости есть
-                # Разбиваем по пробелам и убираем пустые
-                dependencies = [dep.strip() for dep in deps_line.split() if dep.strip()]  # создаем список зависимостей
-                break  # Нашли зависимости, выходим из цикла
-
-    return dependencies  # возвращаем список зависимостей
+    return dependencies  # Возвращаем найденные зависимости
 
 
 def read_dependencies_from_test_file(package_name, test_repo_path):
     """Читает зависимости из тестового файла (для тестового режима)"""
     try:
-        if not os.path.exists(test_repo_path):  # проверяем существование файла
-            raise ValueError(f"Тестовый файл не найден: {test_repo_path}")
+        if not os.path.exists(test_repo_path):  # Проверка существования файла
+            raise ValueError(f"Тестовый файл не найден: {test_repo_path}")  # Ошибка если файл не найден
 
-        with open(test_repo_path, 'r', encoding='utf-8') as f:  # открываем файл для чтения
-            content = f.read()  # читаем все содержимое
+        with open(test_repo_path, 'r', encoding='utf-8') as f:  # Открытие файла для чтения
+            content = f.read()  # Чтение всего содержимого файла
 
-        # Формат: A: B, C, D (пакет A зависит от B, C, D)
-        for line in content.split('\n'):  # разбиваем содержимое на строки
-            line = line.strip()  # убираем лишние пробелы
-            if line and ':' in line and not line.startswith('#'):  # если строка не пустая и содержит двоеточие и не комментарий
-                pkg, deps_str = line.split(':', 1)  # разделяем на пакет и зависимости
-                pkg = pkg.strip()  # убираем пробелы у имени пакета
-                if pkg == package_name:  # если нашли нужный пакет
-                    # Разбиваем зависимости по запятой и убираем пробелы
-                    dependencies = [dep.strip() for dep in deps_str.split(',') if dep.strip()]  # создаем список зависимостей
-                    return dependencies  # возвращаем зависимости
+        for line in content.split('\n'):  # Цикл по всем строкам файла
+            line = line.strip()  # Удаление пробелов в начале и конце
+            if line and ':' in line and not line.startswith('#'):  # Проверка на валидную строку (не пустая, содержит :, не комментарий)
+                pkg, deps_str = line.split(':', 1)  # Разделение строки на имя пакета и зависимости
+                pkg = pkg.strip()  # Очистка имени пакета от пробелов
+                if pkg == package_name:  # Если нашли нужный пакет
+                    dependencies = [dep.strip() for dep in deps_str.split(',') if dep.strip()]  # Разделение зависимостей по запятым и очистка
+                    return dependencies  # Возврат списка зависимостей
 
-        return []  # Пакет не найден в тестовом файле
+        return []  # Возврат пустого списка если пакет не найден
 
-    except Exception as e:  # обработка ошибок
-        raise ValueError(f"Ошибка чтения тестового файла: {e}")
+    except Exception as e:  # Обработка всех исключений
+        raise ValueError(f"Ошибка чтения тестового файла: {e}")  # Преобразование исключения в ValueError
 
 
 def get_package_dependencies(package_name, package_version, repository_url, is_test_mode):
-    """
-    Универсальная функция для получения зависимостей (режим тестирования или реальный)
-    """
-    if is_test_mode:  # если тестовый режим
-        # Тестовый режим - читаем из файла
-        print(f"[ТЕСТОВЫЙ РЕЖИМ] Получаем зависимости для {package_name} из файла")
-        return read_dependencies_from_test_file(package_name, repository_url)  # читаем из файла
-    else:  # если реальный режим
-        # Реальный режим - работаем с Alpine репозиторием
-        print(f"[РЕАЛЬНЫЙ РЕЖИМ] Получаем зависимости для {package_name}-{package_version}")
-        apkindex_content = download_and_parse_apkindex(repository_url)  # скачиваем и парсим APKINDEX
-        return find_package_dependencies(apkindex_content, package_name, package_version)  # ищем зависимости
+    """Универсальная функция для получения зависимостей"""
+    if is_test_mode:  # Проверка режима работы
+        return read_dependencies_from_test_file(package_name, repository_url)  # Чтение из тестового файла
+    else:  # Режим работы с реальным репозиторием
+        apkindex_content = download_and_parse_apkindex(repository_url)  # Загрузка и парсинг APKINDEX
+        return find_package_dependencies(apkindex_content, package_name, package_version)  # Поиск зависимостей
 
 
 def build_dependency_graph(package_name, package_version, repository_path, is_test_mode, depth=0, max_depth=10,
                            chain=None):
-    """Рекурсивно строит граф зависимостей"""
-    if chain is None:  # если цепочка не передана
-        chain = []  # создаем пустую цепочку
+    """Рекурсивно строит граф зависимостей для одного пакета"""
+    if chain is None:  # Если цепочка не передана
+        chain = []  # Инициализируем пустым списком
 
-    if depth > max_depth:  # если превышена максимальная глубина
-        print(f"{'  ' * depth}├── {package_name} -> [MAX_DEPTH]")  # выводим сообщение о превышении глубины
-        dependency_graph[package_name] = ["MAX_DEPTH_REACHED"]  # добавляем в граф отметку о превышении глубины
-        return  # выходим из рекурсии
+    if depth > max_depth:  # Проверка максимальной глубины рекурсии
+        dependency_graph[package_name] = ["MAX_DEPTH_REACHED"]  # Записываем ошибку глубины
+        return  # Прерываем рекурсию
 
-    # Обнаружение циклических зависимостей
-    if package_name in visiting:  # если пакет уже в текущей цепочке (цикл)
-        # Правильно показываем цепочку цикла
-        current_chain = chain + [package_name]  # добавляем текущий пакет в цепочку
-        cycle_start = current_chain.index(package_name)  # находим начало цикла
-        cycle_part = current_chain[cycle_start:]  # получаем циклическую часть
-        cycle_chain = " → ".join(cycle_part)  # форматируем цикл в строку
-        print(f"{'  ' * depth}├── {package_name} ->  ЦИКЛ ({cycle_chain})")  # выводим информацию о цикле
-        dependency_graph[package_name] = ["CYCLE: " + cycle_chain]  # добавляем в граф информацию о цикле
-        return  # выходим из рекурсии
+    if package_name in visiting:  # Обнаружение циклической зависимости
+        current_chain = chain + [package_name]  # Формируем текущую цепочку
+        cycle_start = current_chain.index(package_name)  # Находим начало цикла
+        cycle_part = current_chain[cycle_start:]  # Выделяем циклическую часть
+        cycle_chain = " → ".join(cycle_part)  # Форматируем цикл в строку
+        dependency_graph[package_name] = ["CYCLE: " + cycle_chain]  # Записываем информацию о цикле
+        return  # Прерываем рекурсию
 
-    if package_name in visited:  # если пакет уже полностью обработан
-        return  # выходим из рекурсии
+    if package_name in visited:  # Если пакет уже обработан
+        return  # Выходим из функции
 
-    visiting.add(package_name)  # добавляем пакет в текущую цепочку
-    current_chain = chain + [package_name]  # обновляем текущую цепочку
+    visiting.add(package_name)  # Добавляем пакет в текущую цепочку
+    current_chain = chain + [package_name]  # Обновляем текущую цепочку
 
     try:
-        # Получаем прямые зависимости
-        dependencies = get_package_dependencies(package_name, package_version, repository_path, is_test_mode)  # получаем зависимости пакета
+        dependencies = get_package_dependencies(package_name, package_version, repository_path, is_test_mode)  # Получаем зависимости
+        dependency_graph[package_name] = dependencies  # Сохраняем зависимости в граф
 
-        # Сохраняем в граф
-        dependency_graph[package_name] = dependencies  # добавляем зависимости в граф
+        for dep in dependencies:  # Рекурсивно обрабатываем каждую зависимость
+            build_dependency_graph(dep, None, repository_path, is_test_mode, depth + 1, max_depth, current_chain)
 
-        # Показываем зависимости
-        if dependencies:  # если зависимости есть
-            print(f"{'  ' * depth}├── {package_name} -> {dependencies}")  # выводим пакет и его зависимости
-        else:
-            print(f"{'  ' * depth}├── {package_name} -> []")  # выводим пакет без зависимостей
+    except Exception as e:  # Обработка ошибок
+        dependency_graph[package_name] = ["ERROR: " + str(e)]  # Сохраняем ошибку
 
-        # Рекурсивный обход зависимостей
-        for dep in dependencies:  # для каждой зависимости
-            build_dependency_graph(dep, None, repository_path, is_test_mode, depth + 1, max_depth, current_chain)  # рекурсивно строим граф для зависимости
-
-    except Exception as e:  # обработка ошибок
-        print(f"{'  ' * depth}├── {package_name} -> ОШИБКА: {e}")  # выводим информацию об ошибке
-        dependency_graph[package_name] = ["ERROR"]  # добавляем в граф отметку об ошибке
-
-    finally:
-        visiting.remove(package_name)  # удаляем пакет из текущей цепочки
-        visited.add(package_name)  # добавляем пакет в посещенные
+    finally:  # Выполняется всегда
+        visiting.remove(package_name)  # Удаляем пакет из текущей цепочки
+        visited.add(package_name)  # Добавляем пакет в обработанные
 
 
-def display_parameters(config):
-    """Выводит все параметры в формате ключ-значение"""
-    print("Параметры конфигурации:")
-    for key, value in config.items():  # проходим по всем элементам конфигурации
-        print(f"{key}: {value}")  # выводим ключ-значение
+def build_complete_dependency_graph(repository_url, is_test_mode):
+    """Строит полный граф всех пакетов в репозитории"""
+    print("\nПостроение полного графа зависимостей...")  # Сообщение о начале построения
 
+    if is_test_mode:  # Если тестовый режим
+        all_packages = get_all_packages_from_test_file(repository_url)  # Получаем пакеты из тестового файла
+        print(f"Найдено пакетов в тестовом файле: {len(all_packages)}")  # Вывод количества пакетов
+    else:  # Если рабочий режим
+        all_packages = get_all_packages_from_apkindex(repository_url)  # Получаем пакеты из APKINDEX
+        print(f"Найдено пакетов в репозитории: {len(all_packages)}")  # Вывод количества пакетов
 
-def display_dependencies(package_name, dependencies):
-    """Выводит прямые зависимости пакета"""
-    print(f"\nПрямые зависимости пакета {package_name}:")
-    if dependencies:  # если зависимости есть
-        for i, dep in enumerate(dependencies, 1):  # нумеруем с 1
-            print(f"{i}. {dep}")  # выводим номер и зависимость
-    else:
-        print("Зависимости не найдены")  # сообщение об отсутствии зависимостей
+    total_packages = len(all_packages)  # Сохраняем общее количество пакетов
 
+    # Убираем поштучный вывод, оставляем только общий прогресс
+    for package in all_packages:  # Цикл по всем пакетам
+        if package not in visited:  # Если пакет еще не обработан
+            build_dependency_graph(package, None, repository_url, is_test_mode)  # Строим граф для пакета
+
+    print(f"Обработано пакетов: {len(visited)}/{total_packages}")  # Вывод прогресса обработки
+    print("Полный граф построен!")  # Сообщение о завершении
 
 def display_dependency_graph():
     """Выводит построенный граф зависимостей"""
-    print("\n" + "=" * 60)  # разделительная линия
-    print("ПОСТРОЕННЫЙ ГРАФ ЗАВИСИМОСТЕЙ")  # заголовок
-    print("=" * 60)  # разделительная линия
+    print("\n" + "=" * 60)  # Верхняя разделительная линия
+    print("ПОЛНЫЙ ГРАФ ЗАВИСИМОСТЕЙ РЕПОЗИТОРИЯ")  # Заголовок
+    print("=" * 60)  # Нижняя разделительная линия
 
-    for package, dependencies in dependency_graph.items():  # проходим по всем пакетам в графе
-        if dependencies:  # если есть зависимости
-            deps_str = ", ".join(dependencies)  # объединяем зависимости в строку
-            print(f"{package} -> [{deps_str}]")  # выводим пакет и его зависимости
-        else:
-            print(f"{package} -> []")  # выводим пакет без зависимостей
+    # Сортируем пакеты для удобства чтения
+    sorted_packages = sorted(dependency_graph.keys())  # Сортировка имен пакетов
 
+    for package in sorted_packages:  # Цикл по всем пакетам
+        dependencies = dependency_graph[package]  # Получение зависимостей пакета
+        if dependencies:  # Если зависимости есть
+            deps_str = ", ".join(dependencies)  # Формирование строки зависимостей
+            print(f"{package} -> [{deps_str}]")  # Вывод пакета с зависимостями
+        else:  # Если зависимостей нет
+            print(f"{package} -> []")  # Вывод пакета без зависимостей
+
+    print(f"\nВсего пакетов в графе: {len(dependency_graph)}")  # Вывод общего количества пакетов
 
 def create_test_files():
     """Создает тестовые файлы для демонстрации"""
-    test_files = {  # словарь тестовых файлов
+    test_files = {
         "test_simple.txt": """A: B, C
 B: D
 C: E
 D: 
 E: F
-F:""",  # простой граф
+F:""",
 
         "test_cycle.txt": """A: B
 B: C  
 C: A
 D: E
-E:""",  # граф с циклом
+E:""",
 
         "test_diamond.txt": """A: B, C
 B: D
 C: D
 D: E
-E:""",  # ромбовидный граф
+E:""",
 
         "test_complex.txt": """A: B, C, F
 B: D, E
@@ -285,195 +346,102 @@ H:
 I: J
 J: 
 K: L
-L:"""  # сложный граф
+L:"""
     }
 
-    for filename, content in test_files.items():  # проходим по всем тестовым файлам
-        if not os.path.exists(filename):  # создаем только если файл не существует
-            with open(filename, 'w', encoding='utf-8') as f:  # открываем файл для записи
-                f.write(content)  # записываем содержимое
-            print(f"Создан тестовый файл: {filename}")  # сообщаем о создании файла
+    for filename, content in test_files.items():  # Цикл по всем тестовым файлам
+        if not os.path.exists(filename):  # Проверка существования файла
+            with open(filename, 'w', encoding='utf-8') as f:  # Открытие файла для записи
+                f.write(content)  # Запись содержимого в файл
+            print(f"Создан тестовый файл: {filename}")  # Сообщение о создании файла
 
 
 def interactive_test_mode():
-    """Интерактивный режим тестирования - пользователь сам все выбирает"""
-    print("\n" + "=" * 50)  # разделительная линия
-    print("ИНТЕРАКТИВНЫЙ РЕЖИМ ТЕСТИРОВАНИЯ")  # заголовок
-    print("=" * 50)  # разделительная линия
+    """Интерактивный режим тестирования"""
+    print("\n" + "=" * 50)  # Разделительная линия
+    print("ИНТЕРАКТИВНЫЙ РЕЖИМ ТЕСТИРОВАНИЯ")  # Заголовок
+    print("=" * 50)  # Разделительная линия
 
-    # 1. Пользователь вводит путь к файлу
-    while True:  # бесконечный цикл до получения корректного пути
-        file_path = input("\n Введите путь к тестовому файлу (например: my_graph.txt): ").strip()  # запрашиваем путь к файлу
+    while True:  # Бесконечный цикл для ввода пути
+        file_path = input("\nВведите путь к тестовому файлу (например: test_simple.txt): ").strip()  # Запрос пути
 
-        if not file_path:  # если путь пустой
-            print(" Путь не может быть пустым!")  # сообщение об ошибке
-            continue  # продолжаем цикл
+        if not file_path:  # Проверка пустого ввода
+            print("Путь не может быть пустым!")  # Сообщение об ошибке
+            continue  # Повтор запроса
 
-        # Добавляем расширение .txt если его нет
-        if not file_path.endswith('.txt'):  # если нет расширения .txt
-            file_path += '.txt'  # добавляем расширение
+        if not file_path.endswith('.txt'):  # Проверка расширения
+            file_path += '.txt'  # Добавление расширения .txt
 
-        if os.path.exists(file_path):  # если файл существует
-            break  # выходим из цикла
+        if os.path.exists(file_path):  # Проверка существования файла
+            break  # Выход из цикла если файл найден
         else:
-            print(f" Файл '{file_path}' не найден!")  # сообщение об ошибке
-            print(" Создайте файл в формате:")  # подсказка по формату
-            print("   A: B, C")  # пример формата
-            print("   B: D")  # пример формата
-            print("   C: E")  # пример формата
-            print("   D:")  # пример формата
-            print("   E:")  # пример формата
+            print(f"Файл '{file_path}' не найден!")  # Сообщение об ошибке
+            create_test_files()  # Создание тестовых файлов
+            print("Доступные тестовые файлы:")  # Вывод списка файлов
+            for file in ["test_simple.txt", "test_cycle.txt", "test_diamond.txt", "test_complex.txt"]:  # Цикл по файлам
+                if os.path.exists(file):  # Проверка существования файла
+                    print(f"  - {file}")  # Вывод имени файла
 
-    # 2. Показываем пакеты из выбранного файла
-    print(f"\n Анализируем файл {file_path}...")  # информационное сообщение
-
-    packages = []  # список для хранения пакетов
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:  # открываем файл для чтения
-            for line in f:  # читаем файл построчно
-                line = line.strip()  # убираем пробелы
-                if line and ':' in line and not line.startswith('#'):  # если строка не пустая и содержит двоеточие и не комментарий
-                    pkg = line.split(':', 1)[0].strip()  # извлекаем имя пакета
-                    if pkg and pkg not in packages:  # если пакет не пустой и еще не в списке
-                        packages.append(pkg)  # добавляем пакет в список
-    except Exception as e:  # обработка ошибок чтения
-        print(f" Ошибка чтения файла: {e}")  # выводим ошибку
-        return  # выходим из функции
-
-    if not packages:  # если пакеты не найдены
-        print(" В файле не найдены пакеты!")  # сообщение об ошибке
-        return  # выходим из функции
-
-    print(" Найденные пакеты в файле:")  # заголовок списка пакетов
-    for i, pkg in enumerate(packages, 1):  # нумеруем пакеты с 1
-        print(f"   {i}. {pkg}")  # выводим номер и имя пакета
-
-    # 3. Пользователь выбирает пакет для анализа
-    while True:  # бесконечный цикл до выбора пакета
-        try:
-            pkg_choice = input(f"\nВыберите пакет для анализа (1-{len(packages)}) или введите свой: ").strip()  # запрашиваем выбор пакета
-            if not pkg_choice:  # если выбор пустой
-                print(" Введите номер или имя пакета!")  # сообщение об ошибке
-                continue  # продолжаем цикл
-
-            if pkg_choice.isdigit():  # если введено число
-                pkg_index = int(pkg_choice) - 1  # преобразуем в индекс (начиная с 0)
-                if 0 <= pkg_index < len(packages):  # если индекс в допустимом диапазоне
-                    selected_package = packages[pkg_index]  # выбираем пакет по индексу
-                    break  # выходим из цикла
-                else:
-                    print(f" Введите число от 1 до {len(packages)}!")  # сообщение об ошибке
-            else:
-                selected_package = pkg_choice.upper()  # преобразуем в верхний регистр
-                break  # выходим из цикла
-        except ValueError:  # обработка ошибки преобразования
-            print(" Введите корректный номер или имя пакета!")  # сообщение об ошибке
-
-    # 4. Запускаем построение графа
-    print(f"\n Запускаем построение графа для пакета '{selected_package}' из файла '{file_path}'...")  # информационное сообщение
+    print(f"\nАнализируем файл {file_path}...")  # Сообщение о начале анализа
 
     # Очищаем глобальные структуры
-    dependency_graph.clear()  # очищаем граф зависимостей
-    visited.clear()  # очищаем посещенные пакеты
-    visiting.clear()  # очищаем текущую цепочку
+    dependency_graph.clear()  # Очистка графа зависимостей
+    visited.clear()  # Очистка посещенных пакетов
+    visiting.clear()  # Очистка текущей цепочки
+    global APKINDEX_CACHE, APKINDEX_URL  # Объявление глобальных переменных
+    APKINDEX_CACHE = None  # Сброс кеша APKINDEX
+    APKINDEX_URL = None  # Сброс URL APKINDEX
 
-    # Строим граф
-    build_dependency_graph(  # вызываем построение графа
-        selected_package,  # выбранный пакет
-        None,  # версия не указана
-        file_path,  # передаем путь к файлу, который ввел пользователь
-        True  # тестовый режим
-    )
-
-    # Показываем результат
-    display_dependency_graph()  # выводим построенный граф
-
-    # 5. Предлагаем проанализировать другой пакет
-    while True:  # бесконечный цикл для повторного анализа
-        another = input("\nПроанализировать другой пакет из этого файла? (y/n): ").strip().lower()  # запрашиваем продолжение
-        if another in ['y', 'yes', 'д', 'да']:  # если пользователь хочет продолжить
-            # Выбираем новый пакет
-            while True:  # бесконечный цикл до выбора пакета
-                new_pkg = input(f"Введите имя пакета или номер (1-{len(packages)}): ").strip()  # запрашиваем новый пакет
-                if not new_pkg:  # если ввод пустой
-                    continue  # продолжаем цикл
-
-                if new_pkg.isdigit():  # если введено число
-                    pkg_index = int(new_pkg) - 1  # преобразуем в индекс
-                    if 0 <= pkg_index < len(packages):  # если индекс в диапазоне
-                        selected_package = packages[pkg_index]  # выбираем пакет по индексу
-                        break  # выходим из цикла
-                else:
-                    selected_package = new_pkg.upper()  # преобразуем в верхний регистр
-                    break  # выходим из цикла
-
-            # Очищаем и перестраиваем граф
-            dependency_graph.clear()  # очищаем граф
-            visited.clear()  # очищаем посещенные
-            visiting.clear()  # очищаем текущую цепочку
-
-            print(f"\n Запускаем построение графа для пакета '{selected_package}'...")  # информационное сообщение
-            build_dependency_graph(selected_package, None, file_path, True)  # строим граф для нового пакета
-            display_dependency_graph()  # выводим граф
-        else:
-            break  # выходим из цикла
+    # Строим полный граф
+    build_complete_dependency_graph(file_path, True)  # Построение графа в тестовом режиме
+    display_dependency_graph()  # Вывод графа зависимостей
 
 
 def main():
     """Основная функция приложения"""
-    if len(sys.argv) < 2:  # проверяем количество аргументов
-        print("Использование:")  # выводим справку
-        print("  python main.py <config.xml>    - режим с конфигурационным файлом")  # режим с конфигом
-        print("  python main.py --interactive   - интерактивный тестовый режим")  # интерактивный режим
-        sys.exit(1)  # выходим с ошибкой
+    if len(sys.argv) < 2:  # Проверяем количество аргументов
+        print("Использование:")  # Выводим справку
+        print("  python main.py <config.xml>    - режим с конфигурационным файлом")
+        print("  python main.py --interactive   - интерактивный тестовый режим")
+        sys.exit(1)  # Выход с ошибкой
 
-    if sys.argv[1] == "--interactive":  # интерактивный режим
-        interactive_test_mode()  # запускаем интерактивный режим
-    else:  # режим с конфигурационным файлом
-        config_path = sys.argv[1]  # получаем путь к конфигурационному файлу
+    if sys.argv[1] == "--interactive":  # Если запрошен интерактивный режим
+        interactive_test_mode()  # Запускаем интерактивный режим
+    else:
+        config_path = sys.argv[1]  # Получаем путь к конфигурационному файлу
         try:
             # Этап 1: Загрузка конфигурации
-            config = parse_config(config_path)  # парсим конфигурацию
-            display_parameters(config)  # выводим параметры
+            config = parse_config(config_path)  # Парсим конфигурационный файл
 
-            # Создаем тестовые файлы (для демонстрации)
-            create_test_files()  # создаем тестовые файлы
+            create_test_files()  # Создаем тестовые файлы
 
-            # Этап 2: Получение прямых зависимостей
-            print("\n")  # пустая строка
-            dependencies = get_package_dependencies(  # получаем прямые зависимости
-                config['package_name'],  # имя пакета из конфига
-                config['package_version'],  # версия пакета из конфига
-                config['repository_url'],  # URL репозитория из конфига
-                config['test_repo_mode']  # режим тестирования из конфига
+            # Этап 2: Построение полного графа зависимостей
+
+            # Очищаем глобальные структуры
+            dependency_graph.clear()  # Очищаем граф зависимостей
+            visited.clear()  # Очищаем посещенные пакеты
+            visiting.clear()  # Очищаем текущую цепочку
+            global APKINDEX_CACHE, APKINDEX_URL  # Объявляем глобальные переменные
+            APKINDEX_CACHE = None  # Сбрасываем кеш APKINDEX
+            APKINDEX_URL = None  # Сбрасываем URL APKINDEX
+
+            # Определяем режим работы
+            is_test_mode = config['test_repo_mode'] in ['true', 'local']  # Проверяем тестовый режим
+
+            # Строим полный граф
+            build_complete_dependency_graph(  # Запускаем построение графа
+                config['repository_url'],  # Передаем URL репозитория
+                is_test_mode  # Передаем режим работы
             )
 
-            display_dependencies(config['package_name'], dependencies)  # выводим прямые зависимости
+            display_dependency_graph()  # Выводим граф зависимостей
 
-            # Этап 3: Построение полного графа зависимостей
-            print("\n")  # пустая строка
-            # Очищаем глобальные структуры перед построением графа
-            dependency_graph.clear()  # очищаем граф
-            visited.clear()  # очищаем посещенные пакеты
-            visiting.clear()  # очищаем текущую цепочку
-
-            build_dependency_graph(  # строим полный граф зависимостей
-                config['package_name'],  # имя пакета
-                config['package_version'],  # версия пакета
-                config['repository_url'],  # URL репозитория
-                config['test_repo_mode']  # режим тестирования
-            )
-
-            display_dependency_graph()  # выводим построенный граф
-
-        except ValueError as e:  # обработка ожидаемых ошибок
-            print(f"Ошибка: {e}")  # выводим ошибку
-            sys.exit(1)  # выходим с ошибкой
-        except Exception as e:  # обработка неожиданных ошибок
-            print(f"Неожиданная ошибка: {e}")  # выводим ошибку
-            sys.exit(1)  # выходим с ошибкой
-
+        except ValueError as e:  # Обрабатываем ошибки валидации
+            print(f"Ошибка: {e}")  # Выводим сообщение об ошибке
+            sys.exit(1)  # Выход с ошибкой
+        except Exception as e:  # Обрабатываем все остальные ошибки
+            print(f"Неожиданная ошибка: {e}")  # Выводим сообщение об ошибке
+            sys.exit(1)  # Выход с ошибкой
 
 if __name__ == "__main__":
-
-    main()  # запускаем основную функцию
+    main()
