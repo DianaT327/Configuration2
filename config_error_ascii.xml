@@ -1,0 +1,5 @@
+<config>
+    <package_name>test-package</package_name>
+    <repository_url>https://github.com/user/repo.git</repository_url>
+    <ascii_tree_output>maybe</ascii_tree_output>
+</config>
