@@ -1,0 +1,4 @@
+<config>
+    <package_name>nonexistent-package</package_name>
+    <repository_url>https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64</repository_url>
+</config>
