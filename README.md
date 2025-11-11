@@ -138,3 +138,15 @@
 ### Описание команд для сборки проекта и запуска тестов
 Программа требует только стандартные библиотеки Python: xml.etree.ElementTree, sys, os, urllib.request, urllib.error, gzip, tarfile, io.BytesIO. Тестирование может проводиться как в интерактивном режиме (пользователь указывает путь к файлу описания графа репозитория), так и путем запуска с конфигурационным XML-файлом.
 ### Тестирование
+Результат работы программы с линейной структурой графа зависимости
+<img width="809" height="500" alt="test_simple" src="https://github.com/user-attachments/assets/1c2b5c68-568f-493a-9d63-8dbbdb82ceca" />
+<br>
+Результат работы программы со сложной структурой графа зависимости
+<img width="815" height="609" alt="test_complex" src="https://github.com/user-attachments/assets/0c8c2f59-2d3a-4154-aec8-f1fb5cecb78a" />
+<br>
+Результат работы программы с алмазной структурой графа зависимости
+<img width="729" height="475" alt="test_diamond" src="https://github.com/user-attachments/assets/128b015d-f4fb-4b85-9171-f77d2403b7ae" />
+<br>
+Результат работы программы с циклической структурой графа зависимости
+<img width="840" height="474" alt="test_cycle" src="https://github.com/user-attachments/assets/0b3cad3e-b120-45e9-ba94-138b1f554f92" />
+
